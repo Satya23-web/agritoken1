@@ -102,3 +102,39 @@ def record_harvest(
     )
 
     return crop
+
+
+
+
+
+@router.get("/{crop_id}/ledger")
+def get_ledger(crop_id: int, db: Session = Depends(get_db)):
+    crop = db.query(models.Crop).filter(models.Crop.id == crop_id).first()
+    if not crop:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Crop not found")
+
+    entries = (
+        db.query(models.LedgerEntry)
+        .filter(models.LedgerEntry.crop_id == crop_id)
+        .order_by(models.LedgerEntry.id.asc())
+        .all()
+    )
+    return [
+        {
+            "id": e.id,
+            "event_type": e.event_type,
+            "payload": e.payload,
+            "prev_hash": e.prev_hash,
+            "entry_hash": e.entry_hash,
+            "created_at": e.created_at,
+        }
+        for e in entries
+    ]
+
+
+@router.get("/{crop_id}/verify")
+def verify_crop_ledger(crop_id: int, db: Session = Depends(get_db)):
+    crop = db.query(models.Crop).filter(models.Crop.id == crop_id).first()
+    if not crop:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Crop not found")
+    return ledger.verify_chain(db, crop_id)

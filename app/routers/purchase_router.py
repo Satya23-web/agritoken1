@@ -69,3 +69,7 @@ def my_purchases(
     current_user: models.User = Depends(auth.require_role(models.UserRole.customer)),
 ):
     return db.query(models.Purchase).filter(models.Purchase.customer_id == current_user.id).all()
+
+
+
+
