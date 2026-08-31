@@ -58,3 +58,23 @@ class CropOut(BaseModel):
 class HarvestRecord(BaseModel):
     actual_yield_kg: float
     quality_grade: str
+
+
+
+
+class PurchaseCreate(BaseModel):
+    crop_id: int
+    qty_kg: float
+
+
+class PurchaseOut(BaseModel):
+    id: int
+    crop_id: int
+    customer_id: int
+    qty_kg: float
+    amount_paid: float
+    redeemed_qty_kg: float | None
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
