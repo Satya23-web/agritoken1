@@ -54,3 +54,51 @@ def get_crop(crop_id: int, db: Session = Depends(get_db)):
     if not crop:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Crop not found")
     return crop
+
+
+
+
+@router.post("/{crop_id}/harvest", response_model=schemas.CropOut)
+def record_harvest(
+    crop_id: int,
+    harvest_in: schemas.HarvestRecord,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(auth.require_role(models.UserRole.farmer)),
+):
+    crop = db.query(models.Crop).filter(models.Crop.id == crop_id).first()
+    if not crop:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Crop not found")
+
+    if crop.farmer_id != current_user.id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not your crop")
+
+    if crop.status == models.CropStatus.harvested:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Harvest already recorded")
+
+    fulfillment_ratio = harvest_in.actual_yield_kg / crop.expected_yield_kg
+
+    crop.actual_yield_kg = harvest_in.actual_yield_kg
+    crop.quality_grade = harvest_in.quality_grade
+    crop.fulfillment_ratio = fulfillment_ratio
+    crop.status = models.CropStatus.harvested
+
+    purchases = db.query(models.Purchase).filter(models.Purchase.crop_id == crop.id).all()
+    for purchase in purchases:
+        purchase.redeemed_qty_kg = purchase.qty_kg * fulfillment_ratio
+
+    db.commit()
+    db.refresh(crop)
+
+    ledger.add_entry(
+        db=db,
+        crop_id=crop.id,
+        event_type="harvest_recorded",
+        payload={
+            "actual_yield_kg": harvest_in.actual_yield_kg,
+            "quality_grade": harvest_in.quality_grade,
+            "fulfillment_ratio": fulfillment_ratio,
+            "purchases_updated": len(purchases),
+        },
+    )
+
+    return crop

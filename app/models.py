@@ -27,7 +27,7 @@ class User(Base):
     email = Column(String, unique=True, index=True, nullable=False)
     hashed_password = Column(String, nullable=False)
     role = Column(Enum(UserRole), nullable=False)
-    wallet_balance = Column(Float, default=10000.0)
+    wallet_balance = Column(Float, default=100000.0)
     created_at = Column(DateTime, default=utcnow)
 
     farmer_profile = relationship("FarmerProfile", back_populates="user", uselist=False)

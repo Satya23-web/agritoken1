@@ -60,3 +60,12 @@ def buy_voucher(
     )
 
     return new_purchase
+
+
+
+@router.get("/mine", response_model=list[schemas.PurchaseOut])
+def my_purchases(
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(auth.require_role(models.UserRole.customer)),
+):
+    return db.query(models.Purchase).filter(models.Purchase.customer_id == current_user.id).all()
