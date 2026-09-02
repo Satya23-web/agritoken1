@@ -1,0 +1,323 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>AgriToken</title>
+<style>
+  body { font-family: sans-serif; max-width: 800px; margin: 40px auto; padding: 0 20px; background: #fafafa; }
+  h1 { margin-bottom: 4px; }
+  .subtitle { color: #666; margin-top: 0; margin-bottom: 24px; }
+  .card { border: 1px solid #ddd; border-radius: 8px; padding: 16px; margin-bottom: 16px; background: white; }
+  button { cursor: pointer; padding: 8px 14px; margin-top: 8px; border: none; border-radius: 6px; background: #2e7d32; color: white; font-size: 14px; }
+  button:hover { background: #1b5e20; }
+  button.secondary { background: #888; }
+  button.secondary:hover { background: #555; }
+  input, select { display: block; margin: 6px 0; padding: 8px; width: 100%; box-sizing: border-box; border: 1px solid #ccc; border-radius: 4px; }
+  .bar-bg { background: #eee; border-radius: 6px; height: 10px; overflow: hidden; margin: 6px 0; }
+  .bar-fill { background: #4caf50; height: 100%; }
+  #authStatus { font-weight: bold; margin-bottom: 16px; }
+  .row { display: flex; gap: 10px; }
+  .row > * { flex: 1; }
+  .tag { display: inline-block; font-size: 12px; padding: 2px 8px; border-radius: 10px; background: #e0e0e0; margin-left: 6px; }
+  .tag.open { background: #fff3cd; color: #856404; }
+  .tag.funded { background: #cce5ff; color: #004085; }
+  .tag.harvested { background: #d4edda; color: #155724; }
+  .error { color: #c62828; font-size: 14px; }
+  .success { color: #2e7d32; font-size: 14px; }
+  .muted { color: #888; font-size: 13px; }
+  .ledger-entry { font-family: monospace; font-size: 12px; background: #f5f5f5; padding: 8px; border-radius: 4px; margin-bottom: 6px; word-break: break-all; }
+  nav button { margin-right: 8px; }
+  .tabs { margin-bottom: 20px; }
+</style>
+</head>
+<body>
+
+<h1>🌶️ AgriToken</h1>
+<p class="subtitle">Tokenized pre-order farming for Andhra Pradesh farmers</p>
+
+<div id="authStatus">Not logged in</div>
+<div id="authArea"></div>
+
+<div class="tabs" id="tabs" style="display:none;">
+  <nav>
+    <button onclick="showTab('crops')">Browse Crops</button>
+    <button onclick="showTab('create')" id="createTabBtn" style="display:none;">List a Crop</button>
+  </nav>
+</div>
+
+<div id="cropsTab"></div>
+<div id="createTab" style="display:none;"></div>
+
+<script>
+const API_BASE = "http://127.0.0.1:8000";
+let token = null;
+let currentUser = null; // { id, email, role, wallet_balance }
+
+// ---------- API helper ----------
+async function api(path, options = {}) {
+  const headers = options.headers || {};
+  if (token) headers["Authorization"] = "Bearer " + token;
+  if (options.body && !options.isForm) headers["Content-Type"] = "application/json";
+
+  const res = await fetch(API_BASE + path, { ...options, headers });
+  const data = await res.json().catch(() => null);
+  if (!res.ok) {
+    const msg = (data && (data.detail || JSON.stringify(data))) || res.statusText;
+    throw new Error(typeof msg === "string" ? msg : JSON.stringify(msg));
+  }
+  return data;
+}
+
+// ---------- Auth ----------
+function renderAuthArea() {
+  const el = document.getElementById("authArea");
+  if (currentUser) {
+    document.getElementById("authStatus").innerText =
+      `Logged in as ${currentUser.email} (${currentUser.role}) — Wallet: ₹${currentUser.wallet_balance}`;
+    el.innerHTML = `<button class="secondary" onclick="logout()">Logout</button>`;
+    document.getElementById("tabs").style.display = "block";
+    document.getElementById("createTabBtn").style.display =
+      currentUser.role === "farmer" ? "inline-block" : "none";
+    return;
+  }
+
+  document.getElementById("authStatus").innerText = "Not logged in";
+  document.getElementById("tabs").style.display = "none";
+
+  el.innerHTML = `
+    <div class="card">
+      <div class="row">
+        <div>
+          <h3>Login</h3>
+          <input id="loginEmail" placeholder="email">
+          <input id="loginPassword" type="password" placeholder="password">
+          <button onclick="doLogin()">Login</button>
+          <div id="loginMsg"></div>
+        </div>
+        <div>
+          <h3>Register</h3>
+          <input id="regEmail" placeholder="email">
+          <input id="regPassword" type="password" placeholder="password">
+          <select id="regRole">
+            <option value="farmer">Farmer</option>
+            <option value="customer">Customer</option>
+          </select>
+          <button onclick="doRegister()">Register</button>
+          <div id="regMsg"></div>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+async function doRegister() {
+  const email = document.getElementById("regEmail").value;
+  const password = document.getElementById("regPassword").value;
+  const role = document.getElementById("regRole").value;
+  const msgEl = document.getElementById("regMsg");
+  try {
+    await api("/auth/register", { method: "POST", body: JSON.stringify({ email, password, role }) });
+    msgEl.innerHTML = `<span class="success">Registered! Now login.</span>`;
+  } catch (e) {
+    msgEl.innerHTML = `<span class="error">${e.message}</span>`;
+  }
+}
+
+async function doLogin() {
+  const email = document.getElementById("loginEmail").value;
+  const password = document.getElementById("loginPassword").value;
+  const msgEl = document.getElementById("loginMsg");
+  try {
+    const form = new URLSearchParams();
+    form.append("username", email);
+    form.append("password", password);
+    const res = await fetch(API_BASE + "/auth/login", { method: "POST", body: form });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || "Login failed");
+    token = data.access_token;
+    currentUser = await api("/auth/me");
+    renderAuthArea();
+    loadCrops();
+  } catch (e) {
+    msgEl.innerHTML = `<span class="error">${e.message}</span>`;
+  }
+}
+
+function logout() {
+  token = null;
+  currentUser = null;
+  renderAuthArea();
+}
+
+// ---------- Tabs ----------
+function showTab(name) {
+  document.getElementById("cropsTab").style.display = name === "crops" ? "block" : "none";
+  document.getElementById("createTab").style.display = name === "create" ? "block" : "none";
+  if (name === "crops") loadCrops();
+}
+
+// ---------- Create Crop ----------
+function renderCreateTab() {
+  document.getElementById("createTab").innerHTML = `
+    <div class="card">
+      <h3>List a New Crop</h3>
+      <input id="cropName" placeholder="Crop name (e.g. Guntur Chilli)">
+      <input id="expectedYield" type="number" placeholder="Expected yield (kg)">
+      <input id="costNeeded" type="number" placeholder="Cost needed (₹)">
+      <button onclick="createCrop()">List Crop</button>
+      <div id="createMsg"></div>
+    </div>
+  `;
+}
+
+async function createCrop() {
+  const crop_name = document.getElementById("cropName").value;
+  const expected_yield_kg = parseFloat(document.getElementById("expectedYield").value);
+  const cost_needed = parseFloat(document.getElementById("costNeeded").value);
+  const msgEl = document.getElementById("createMsg");
+  try {
+    await api("/crops", {
+      method: "POST",
+      body: JSON.stringify({ crop_name, expected_yield_kg, cost_needed }),
+    });
+    msgEl.innerHTML = `<span class="success">Crop listed!</span>`;
+    showTab("crops");
+  } catch (e) {
+    msgEl.innerHTML = `<span class="error">${e.message}</span>`;
+  }
+}
+
+// ---------- Crops list ----------
+async function loadCrops() {
+  const container = document.getElementById("cropsTab");
+  container.innerHTML = `<p class="muted">Loading crops...</p>`;
+  try {
+    const crops = await api("/crops");
+    if (crops.length === 0) {
+      container.innerHTML = `<p class="muted">No crops listed yet.</p>`;
+      return;
+    }
+    container.innerHTML = crops.map(renderCropCard).join("");
+  } catch (e) {
+    container.innerHTML = `<p class="error">${e.message}</p>`;
+  }
+}
+
+function renderCropCard(crop) {
+  const pct = Math.min(100, (crop.qty_sold_kg / crop.expected_yield_kg) * 100).toFixed(0);
+  const canBuy = currentUser && currentUser.role === "customer" && crop.status === "open";
+  const canHarvest = currentUser && currentUser.role === "farmer" &&
+    currentUser.id === crop.farmer_id && crop.status !== "harvested";
+
+  let harvestInfo = "";
+  if (crop.status === "harvested") {
+    harvestInfo = `
+      <p class="muted">Actual yield: ${crop.actual_yield_kg}kg (${(crop.fulfillment_ratio * 100).toFixed(0)}% fulfillment) — Grade ${crop.quality_grade}</p>
+    `;
+  }
+
+  return `
+    <div class="card">
+      <h3>${crop.crop_name} <span class="tag ${crop.status}">${crop.status}</span></h3>
+      <p class="muted">Farmer #${crop.farmer_id} • ₹${crop.price_per_kg}/kg • Expected ${crop.expected_yield_kg}kg</p>
+      <div class="bar-bg"><div class="bar-fill" style="width:${pct}%"></div></div>
+      <p class="muted">${crop.qty_sold_kg} / ${crop.expected_yield_kg} kg sold (${pct}%)</p>
+      ${harvestInfo}
+
+      ${canBuy ? `
+        <div class="row">
+          <input id="buyQty-${crop.id}" type="number" placeholder="kg to buy">
+          <button onclick="buyVoucher(${crop.id})">Buy Voucher</button>
+        </div>
+        <div id="buyMsg-${crop.id}"></div>
+      ` : ""}
+
+      ${canHarvest ? `
+        <div class="row">
+          <input id="harvestYield-${crop.id}" type="number" placeholder="Actual yield (kg)">
+          <input id="harvestGrade-${crop.id}" placeholder="Quality grade (A/B/C)">
+          <button onclick="recordHarvest(${crop.id})">Record Harvest</button>
+        </div>
+        <div id="harvestMsg-${crop.id}"></div>
+      ` : ""}
+
+      <button class="secondary" onclick="toggleLedger(${crop.id})">View Ledger</button>
+      <div id="ledger-${crop.id}" style="display:none; margin-top:10px;"></div>
+    </div>
+  `;
+}
+
+async function buyVoucher(cropId) {
+  const qty = parseFloat(document.getElementById(`buyQty-${cropId}`).value);
+  const msgEl = document.getElementById(`buyMsg-${cropId}`);
+  try {
+    const purchase = await api("/purchases", {
+      method: "POST",
+      body: JSON.stringify({ crop_id: cropId, qty_kg: qty }),
+    });
+    msgEl.innerHTML = `<span class="success">Bought ${purchase.qty_kg}kg for ₹${purchase.amount_paid}</span>`;
+    currentUser = await api("/auth/me");
+    renderAuthArea();
+    loadCrops();
+  } catch (e) {
+    msgEl.innerHTML = `<span class="error">${e.message}</span>`;
+  }
+}
+
+async function recordHarvest(cropId) {
+  const actual_yield_kg = parseFloat(document.getElementById(`harvestYield-${cropId}`).value);
+  const quality_grade = document.getElementById(`harvestGrade-${cropId}`).value;
+  const msgEl = document.getElementById(`harvestMsg-${cropId}`);
+  try {
+    await api(`/crops/${cropId}/harvest`, {
+      method: "POST",
+      body: JSON.stringify({ actual_yield_kg, quality_grade }),
+    });
+    msgEl.innerHTML = `<span class="success">Harvest recorded!</span>`;
+    loadCrops();
+  } catch (e) {
+    msgEl.innerHTML = `<span class="error">${e.message}</span>`;
+  }
+}
+
+// ---------- Ledger ----------
+async function toggleLedger(cropId) {
+  const el = document.getElementById(`ledger-${cropId}`);
+  if (el.style.display === "block") {
+    el.style.display = "none";
+    return;
+  }
+  el.style.display = "block";
+  el.innerHTML = `<p class="muted">Loading ledger...</p>`;
+  try {
+    const [entries, verify] = await Promise.all([
+      api(`/crops/${cropId}/ledger`),
+      api(`/crops/${cropId}/verify`),
+    ]);
+    const verifyBadge = verify.chain_valid
+      ? `<span class="success">✔ Chain verified (${verify.entries_checked} entries, tamper-free)</span>`
+      : `<span class="error">✘ Chain broken at entry ${verify.broken_at_entry_id}: ${verify.reason}</span>`;
+
+    el.innerHTML = `
+      <p>${verifyBadge}</p>
+      ${entries.map(e => `
+        <div class="ledger-entry">
+          <b>${e.event_type}</b> (id ${e.id})<br>
+          payload: ${e.payload}<br>
+          prev_hash: ${e.prev_hash.slice(0, 16)}...<br>
+          entry_hash: ${e.entry_hash.slice(0, 16)}...
+        </div>
+      `).join("")}
+    `;
+  } catch (e) {
+    el.innerHTML = `<p class="error">${e.message}</p>`;
+  }
+}
+
+// ---------- init ----------
+renderAuthArea();
+renderCreateTab();
+loadCrops();
+</script>
+</body>
+</html>
